@@ -223,7 +223,7 @@ def sync_all(students_df, history_df, milestones_df):
             for ms in MILESTONES:
                 if res['rating'] >= ms:
                     already = milestones_df[
-                        (milestones_df['Student ID'].astype(str) == student_id) &
+                        (milestones_df.iloc[:, 0].astype(str) == student_id) &
                         (milestones_df['Platform'] == res['platform']) &
                         (milestones_df['Milestone'].astype(str) == str(ms))
                     ]
@@ -244,7 +244,7 @@ def sync_all(students_df, history_df, milestones_df):
 # ==================== DATA HELPERS ====================
 def get_rating_change(student_id, platform, game_type, history_df):
     entries = history_df[
-        (history_df['Student ID'].astype(str) == str(student_id)) &
+        (history_df.iloc[:, 0].astype(str) == str(student_id)) &
         (history_df['Platform'] == platform) &
         (history_df['Game Type'] == game_type)
     ].copy()
@@ -264,7 +264,7 @@ def get_rating_change(student_id, platform, game_type, history_df):
 
 def get_top_milestone(student_id, platform, milestones_df):
     mils = milestones_df[
-        (milestones_df['Student ID'].astype(str) == str(student_id)) &
+        (milestones_df.iloc[:, 0].astype(str) == str(student_id)) &
         (milestones_df['Platform'] == platform)
     ]['Milestone'].astype(int).tolist()
     return max(mils) if mils else None
