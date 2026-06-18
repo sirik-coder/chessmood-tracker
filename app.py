@@ -124,7 +124,7 @@ def get_gsheet_client():
 
 def get_sheet(tab_name):
     client = get_gsheet_client()
-    sheet_id = st.secrets["sheet_id"]
+    sheet_id = st.secrets["sheet_id"]["sheet_id"] if "sheet_id" in st.secrets and isinstance(st.secrets["sheet_id"], dict) else st.secrets["sheet_id"]
     spreadsheet = client.open_by_key(sheet_id)
     return spreadsheet.worksheet(tab_name)
 
