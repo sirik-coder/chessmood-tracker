@@ -224,7 +224,7 @@ def sync_all(students_df, history_df, milestones_df):
                 if res['rating'] >= ms:
                     already = milestones_df[
                         (milestones_df.iloc[:, 0].astype(str) == student_id) &
-                        (milestones_df['Platform'] == res['platform']) &
+                        (milestones_df.iloc[:, 1] == res['platform']) &
                         (milestones_df['Milestone'].astype(str) == str(ms))
                     ]
                     if already.empty:
@@ -265,7 +265,7 @@ def get_rating_change(student_id, platform, game_type, history_df):
 def get_top_milestone(student_id, platform, milestones_df):
     mils = milestones_df[
         (milestones_df.iloc[:, 0].astype(str) == str(student_id)) &
-        (milestones_df['Platform'] == platform)
+        (milestones_df.iloc[:, 1] == platform)
     ]['Milestone'].astype(int).tolist()
     return max(mils) if mils else None
 
