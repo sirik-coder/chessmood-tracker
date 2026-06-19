@@ -404,7 +404,7 @@ def main():
 
     for _, row in df.iterrows():
         col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1.5, 2, 2, 1])
-            with col1:
+        with col1:
                 st.markdown(f"**{row['Student']}**  \n`{row['Username']}`")
             with col2:
                 badge_class = 'badge-chesscom' if row['Platform'] == 'Chess.com' else 'badge-lichess'
