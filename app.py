@@ -424,21 +424,20 @@ def main():
             else:
                 st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
         with col5:
-            if row['Milestone']:
-                ms = int(float(row['Milestone']))
-                ms_class = f'ms-{ms}'
-                icon = ms_icons.get(ms, '')
-                st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
-            else:
-                st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-        with col6:
-            pass
-
-    # Sidebar milestones
-    with st.sidebar:
-        st.markdown("### 🏆 Milestones This Month")
-        for ms in [2200, 2000, 1800, 1500, 1000]:
-            count = 0
+                if row['Milestone']:
+                    try:
+                        ms = int(float(row['Milestone']))
+                    except (ValueError, TypeError):
+                        ms = None
+                    if ms:
+                        ms_class = f'ms-{ms}'
+                        icon = ms_icons.get(ms, '')
+                        st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
+            with col6:
+                pass
+        
             if not milestones_df.empty:
                 count = len(milestones_df[
                     (milestones_df['Date'] >= month_start) &
