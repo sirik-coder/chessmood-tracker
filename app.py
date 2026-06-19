@@ -403,8 +403,8 @@ def main():
     ms_icons = {2200: '👑', 2000: '⭐', 1800: '★', 1500: '◆', 1000: '●'}
 
     for _, row in df.iterrows():
-        col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1.5, 2, 2, 1])
-        with col1:
+            col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1.5, 2, 2, 1])
+            with col1:
                 st.markdown(f"**{row['Student']}**  \n`{row['Username']}`")
             with col2:
                 badge_class = 'badge-chesscom' if row['Platform'] == 'Chess.com' else 'badge-lichess'
@@ -434,13 +434,9 @@ def main():
                         icon = ms_icons.get(ms, '')
                         st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
                 else:
+                    st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
             with col6:
                 pass
-            if not milestones_df.empty:
-                count = len(milestones_df[
-                    (milestones_df['Date'] >= month_start) &
-                    (milestones_df['Milestone'].astype(str) == str(ms))
-                ])
             st.metric(label=f"{ms_icons.get(ms,'')} {ms}+", value=count)
 
         st.markdown("---")
