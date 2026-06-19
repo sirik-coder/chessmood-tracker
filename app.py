@@ -437,7 +437,7 @@ def main():
                     st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
             with col6:
                 pass
-        st.metric(label=f"{ms_icons.get(ms,'')} {ms}+", value=count)
+    st.metric(label=f"{ms_icons.get(ms,'')} {ms}+", value=count)
 
         st.markdown("---")
         st.markdown("### ⚙ Settings")
