@@ -437,12 +437,20 @@ def main():
                     st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
             with col6:
                 pass
-    st.metric(label=f"{ms_icons.get(ms,'')} {ms}+", value=count)
+    with st.sidebar:
+            st.markdown("### 🏆 Milestones This Month")
+            for ms in [2200, 2000, 1800, 1500, 1000]:
+                count = 0
+                if not milestones_df.empty:
+                    count = len(milestones_df[
+                        (milestones_df['Date'] >= month_start) &
+                        (milestones_df['Milestone'].astype(str) == str(ms))
+                    ])
+                st.metric(label=f"{ms_icons.get(ms,'')} {ms}+", value=count)
 
-        st.markdown("---")
-        st.markdown("### ⚙ Settings")
-        st.markdown(f"**Students tracked:** {len(students_df)}")
-        st.markdown(f"**History records:** {len(history_df)}")
-
+            st.markdown("---")
+            st.markdown("### ⚙ Settings")
+            st.markdown(f"**Students tracked:** {len(students_df)}")
+            st.markdown(f"**History records:** {len(history_df)}")
 if __name__ == "__main__":
     main()
