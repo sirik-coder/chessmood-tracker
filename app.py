@@ -414,7 +414,7 @@ def main():
                 st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
         with col5:
             if row['Milestone']:
-                ms = int(float(row['Milestone'])
+                ms = int(float(row['Milestone']))
                 ms_class = f'ms-{ms}'
                 icon = ms_icons.get(ms, '')
                 st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
