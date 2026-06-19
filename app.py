@@ -435,7 +435,7 @@ def main():
                         st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
                 else:
                     st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-            with col6:
+        with col6:
                 pass
         
             if not milestones_df.empty:
