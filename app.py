@@ -406,13 +406,13 @@ def main():
         col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1.5, 2, 2, 1])
         with col1:
             st.markdown(f"**{row['Student']}**  \n`{row['Username']}`")
-        with col2:
+            with col2:
             badge_class = 'badge-chesscom' if row['Platform'] == 'Chess.com' else 'badge-lichess'
             icon = '♟' if row['Platform'] == 'Chess.com' else '⚡'
             st.markdown(f'<a href="{row["Profile"]}" target="_blank"><span class="{badge_class}">{icon} {row["Platform"]} ↗</span></a>', unsafe_allow_html=True)
-        with col3:
+            with col3:
             st.markdown(f"<span style='color:#7a8099;font-size:13px'>{row['Game Type']}</span>", unsafe_allow_html=True)
-        with col4:
+            with col4:
             if row['Rating Change'] is not None:
                 sign = '+' if row['Rating Change'] > 0 else ''
                 if row['Hot Streak']:
@@ -423,7 +423,7 @@ def main():
                     st.markdown(f'<span style="color:#4a5068">{sign}{row["Rating Change"]}</span>', unsafe_allow_html=True)
             else:
                 st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-        with col5:
+            with col5:
                 if row['Milestone']:
                     try:
                         ms = int(float(row['Milestone']))
@@ -434,10 +434,8 @@ def main():
                         icon = ms_icons.get(ms, '')
                         st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
                 else:
-                    st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-        with col6:
+            with col6:
                 pass
-        
             if not milestones_df.empty:
                 count = len(milestones_df[
                     (milestones_df['Date'] >= month_start) &
