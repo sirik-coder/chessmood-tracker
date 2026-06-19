@@ -228,7 +228,18 @@ def sync_all(students_df, history_df, milestones_df):
                         (milestones_df['Milestone'].astype(str) == str(ms))
                     ]
                     if already.empty:
-                        new_milestones.append([student_id, res['platform'], ms, date_str, row['Name'], res['username']])
+                        prev_entries = history_df[
+                            (history_df.iloc[:, 0].astype(str) == str(student_id)) &
+                            (history_df['Platform'] == res['platform']) &
+                            (history_df['Game Type'] == res['gameType'])
+                        ]
+                        if not prev_entries.empty:
+                            try:
+                                prev_rating = float(prev_entries.iloc[-1]['Rating'])
+                                if prev_rating < ms:
+                                    new_milestones.append([student_id, res['platform'], ms, date_str, row['Name'], res['username']])
+                            except (ValueError, TypeError):
+                                pass
 
         time.sleep(0.05)
 
