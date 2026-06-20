@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 MILESTONES = [1000, 1500, 1800, 2000, 2200]
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
+# Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
+API_HEADERS = {'User-Agent': 'ChessMood-Tracker/1.0 (contact: sirik@chessmood.com)'}
+
 def get_client():
     creds_json = os.environ['GCP_SERVICE_ACCOUNT_JSON']
     creds_dict = json.loads(creds_json)
@@ -22,7 +25,7 @@ def get_sheet(client, tab_name):
 
 def fetch_chesscom(username):
     try:
-        r = requests.get(f"https://api.chess.com/pub/player/{username}/stats", timeout=10)
+        r = requests.get(f"https://api.chess.com/pub/player/{username}/stats", headers=API_HEADERS, timeout=10)
         if r.status_code != 200:
             return None
         d = r.json()
@@ -36,7 +39,7 @@ def fetch_chesscom(username):
 
 def fetch_lichess(username):
     try:
-        r = requests.get(f"https://lichess.org/api/user/{username}", timeout=10)
+        r = requests.get(f"https://lichess.org/api/user/{username}", headers=API_HEADERS, timeout=10)
         if r.status_code != 200:
             return None
         d = r.json()

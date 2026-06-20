@@ -13,6 +13,9 @@ STREAK_THRESHOLD = 100
 STREAK_DAYS = 30
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
+# Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
+API_HEADERS = {'User-Agent': 'ChessMood-Tracker/1.0 (contact: sirik@chessmood.com)'}
+
 st.set_page_config(
     page_title="ChessMood Students Progress Tracker",
     page_icon="♟",
@@ -155,7 +158,7 @@ def append_to_sheet(tab_name, rows):
 # ==================== CHESS APIs ====================
 def fetch_chesscom(username):
     try:
-        r = requests.get(f"https://api.chess.com/pub/player/{username}/stats", timeout=10)
+        r = requests.get(f"https://api.chess.com/pub/player/{username}/stats", headers=API_HEADERS, timeout=10)
         if r.status_code != 200:
             return None
         d = r.json()
@@ -169,7 +172,7 @@ def fetch_chesscom(username):
 
 def fetch_lichess(username):
     try:
-        r = requests.get(f"https://lichess.org/api/user/{username}", timeout=10)
+        r = requests.get(f"https://lichess.org/api/user/{username}", headers=API_HEADERS, timeout=10)
         if r.status_code != 200:
             return None
         d = r.json()

@@ -1,0 +1,12 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Streamlit local secrets — NEVER commit credentials
+.streamlit/secrets.toml
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
