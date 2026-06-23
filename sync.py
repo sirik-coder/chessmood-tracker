@@ -29,11 +29,14 @@ def fetch_chesscom(username):
         if r.status_code != 200:
             return None
         d = r.json()
-        return {
-            'rapid': d.get('chess_rapid', {}).get('last', {}).get('rating'),
-            'blitz': d.get('chess_blitz', {}).get('last', {}).get('rating'),
-            'classical': d.get('chess_daily', {}).get('last', {}).get('rating'),
-        }
+        out = {}
+        for gt, key in [('rapid', 'chess_rapid'), ('blitz', 'chess_blitz'), ('classical', 'chess_daily')]:
+            blk = d.get(key, {})
+            rating = blk.get('last', {}).get('rating')
+            if rating:
+                best = blk.get('best', {})
+                out[gt] = {'rating': rating, 'best': best.get('rating'), 'best_ts': best.get('date')}
+        return out
     except:
         return None
 
@@ -49,6 +52,44 @@ def fetch_lichess(username):
             'blitz': perfs.get('blitz', {}).get('rating'),
             'classical': perfs.get('classical', {}).get('rating'),
         }
+    except:
+        return None
+
+def platform_prior_max(res):
+    """The player's best rating in this game type strictly BEFORE today, from the platform's
+    own all-time history. Lets us confirm a milestone is genuinely first-time-ever, since our
+    own History only goes back to when tracking started. Returns None if it can't be determined
+    (in which case we fall back to our tracked history and do NOT suppress)."""
+    today = datetime.utcnow().date()
+    if res['platform'] == 'Chess.com':
+        # Chess.com's stats response already includes the all-time best + the date it was set.
+        best, best_ts = res.get('best'), res.get('best_ts')
+        if best and best_ts:
+            try:
+                if datetime.utcfromtimestamp(best_ts).date() < today:
+                    return best
+            except (ValueError, TypeError, OSError):
+                return None
+        return None
+    # Lichess: full daily rating history is available; take the max recorded before today.
+    try:
+        r = requests.get(f"https://lichess.org/api/user/{res['username']}/rating-history",
+                         headers=API_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return None
+        target = {'rapid': 'Rapid', 'blitz': 'Blitz', 'classical': 'Classical'}.get(res['gameType'])
+        for perf in r.json():
+            if perf.get('name') == target:
+                mx = None
+                for p in perf.get('points', []):  # [year, month(0-based), day, rating]
+                    try:
+                        pdate = datetime(p[0], p[1] + 1, p[2]).date()
+                    except (ValueError, TypeError, IndexError):
+                        continue
+                    if pdate < today:
+                        mx = p[3] if mx is None else max(mx, p[3])
+                return mx
+        return None
     except:
         return None
 
@@ -94,15 +135,18 @@ def main():
             data = fetch_chesscom(chesscom)
             if data:
                 for gt in ['rapid', 'blitz', 'classical']:
-                    if data.get(gt):
-                        results.append({'platform': 'Chess.com', 'gameType': gt, 'rating': data[gt], 'username': chesscom})
+                    if gt in data:
+                        info = data[gt]
+                        results.append({'platform': 'Chess.com', 'gameType': gt, 'rating': info['rating'],
+                                        'username': chesscom, 'best': info['best'], 'best_ts': info['best_ts']})
 
         if lichess:
             data = fetch_lichess(lichess)
             if data:
                 for gt in ['rapid', 'blitz', 'classical']:
                     if data.get(gt):
-                        results.append({'platform': 'Lichess', 'gameType': gt, 'rating': data[gt], 'username': lichess})
+                        results.append({'platform': 'Lichess', 'gameType': gt, 'rating': data[gt],
+                                        'username': lichess, 'best': None, 'best_ts': None})
 
         if results:
             total_students += 1
@@ -127,16 +171,23 @@ def main():
                     prev_max = pd.to_numeric(prev['Rating'], errors='coerce').max()
 
             if prev_max is not None and pd.notna(prev_max):
-                for ms in MILESTONES:
-                    if prev_max < ms <= current_rating:
-                        new_milestones.append({
-                            'sid': student_id,
-                            'platform': res['platform'],
-                            'gameType': res['gameType'],
-                            'ms': ms,
-                            'name': name,
-                            'username': res['username'],
-                        })
+                candidate_ms = [ms for ms in MILESTONES if prev_max < ms <= current_rating]
+                if candidate_ms:
+                    # Our History only goes back to tracking start, so a crossing here might not be
+                    # the player's first time EVER (they may have reached it earlier, then dipped).
+                    # Confirm against the platform's all-time history before flagging it.
+                    plat_prior = platform_prior_max(res)
+                    for ms in candidate_ms:
+                        true_prior = prev_max if plat_prior is None else max(prev_max, plat_prior)
+                        if true_prior < ms:
+                            new_milestones.append({
+                                'sid': student_id,
+                                'platform': res['platform'],
+                                'gameType': res['gameType'],
+                                'ms': ms,
+                                'name': name,
+                                'username': res['username'],
+                            })
 
     if new_history:
         history_ws.append_rows(new_history)
