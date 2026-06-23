@@ -444,6 +444,29 @@ def main():
     with c4:
         st.markdown(f'<div class="stat-box"><div class="stat-label">Platforms Tracked</div><div class="stat-value">2</div><div style="font-size:12px;color:#7a8099">Chess.com · Lichess</div></div>', unsafe_allow_html=True)
 
+    # Click-to-view detail for the Hot Streaks and Milestones cards
+    with st.expander(f"🔥 View hot streaks ({streaks})", expanded=False):
+        if 'Hot Streak' in base_df.columns:
+            hs = base_df[base_df['Hot Streak'] == True][['Student', 'Platform', 'Game Type', 'Rating Change', 'Days']]
+            hs = hs.sort_values('Rating Change', ascending=False)
+        else:
+            hs = pd.DataFrame()
+        if not hs.empty:
+            st.dataframe(hs, use_container_width=True, hide_index=True)
+        else:
+            st.caption(f"No hot streaks right now (+{STREAK_THRESHOLD} in under {STREAK_DAYS} days).")
+
+    with st.expander(f"🏆 View milestones this month ({ms_this_month})", expanded=False):
+        if ms_this_month > 0:
+            mtm = milestones_df[milestones_df['Date'] >= month_start].copy()
+            cols = [c for c in ['Student Name', 'Platform', 'Milestone', 'Date'] if c in mtm.columns]
+            mtm = mtm[cols]
+            if 'Milestone' in mtm.columns:
+                mtm = mtm.sort_values('Milestone', ascending=False)
+            st.dataframe(mtm, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No milestones reached yet this month.")
+
     # Filters
     st.markdown("### Filters")
     col_f1, col_f2, col_f3 = st.columns(3)
