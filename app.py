@@ -115,6 +115,20 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .ms-1000 { background: rgba(62,207,142,0.12); color: #3ecf8e; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
 
 div[data-testid="stDataFrame"] { background: #161920; border-radius: 16px; }
+
+/* Sort button (popover trigger) — gold-tinted so it's clearly a button, not a faint white icon */
+div[data-testid="stPopover"] button {
+    background-color: rgba(240,184,75,0.12) !important;
+    color: #f0b84b !important;
+    border: 1px solid rgba(240,184,75,0.45) !important;
+    font-weight: 600 !important;
+    border-radius: 8px !important;
+}
+div[data-testid="stPopover"] button:hover {
+    background-color: rgba(240,184,75,0.22) !important;
+    border-color: #f0b84b !important;
+    color: #f0b84b !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,6 +145,7 @@ def get_sheet(tab_name):
     spreadsheet = client.open_by_key(sheet_id)
     return spreadsheet.worksheet(tab_name)
 
+@st.cache_data(ttl=600)
 def load_students():
     ws = get_sheet("Students")
     rows = ws.get_all_records()
@@ -141,11 +156,13 @@ def load_students():
     df = df[df['Membership Status'].str.lower() == 'active']
     return df.reset_index(drop=True)
 
+@st.cache_data(ttl=600)
 def load_history():
     ws = get_sheet("History")
     rows = ws.get_all_records()
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['Student ID','Platform','Game Type','Rating','Date','Timestamp','Username'])
 
+@st.cache_data(ttl=600)
 def load_milestones():
     ws = get_sheet("MilestonesLog")
     rows = ws.get_all_records()
@@ -283,6 +300,101 @@ def get_top_milestone(student_id, platform, milestones_df):
     ]['Milestone'].astype(int).tolist()
     return max(mils) if mils else None
 
+# ============ PRECOMPUTED LOOKUPS (cached — one pass instead of per-cell scans) ============
+@st.cache_data(ttl=600)
+def compute_rating_changes(history_df):
+    """Return {(student_id, platform, game_type): {'diff','days','latest'}} in a single pass.
+    Mirrors get_rating_change() exactly, but computed once for the whole sheet."""
+    changes = {}
+    if history_df is None or history_df.empty:
+        return changes
+    h = history_df.copy()
+    h['_sid'] = h.iloc[:, 0].astype(str)
+    h['_ts'] = pd.to_datetime(h['Timestamp'], errors='coerce')
+    h = h.dropna(subset=['_ts'])
+    for (sid, platform, gt), grp in h.groupby(['_sid', 'Platform', 'Game Type']):
+        if len(grp) < 2:
+            continue
+        grp = grp.sort_values('_ts')
+        latest = grp.iloc[-1]
+        cutoff = latest['_ts'] - timedelta(days=STREAK_DAYS)
+        window = grp[grp['_ts'] >= cutoff]
+        if window.empty:
+            continue
+        first = window.iloc[0]
+        try:
+            diff = int(latest['Rating']) - int(first['Rating'])
+        except (ValueError, TypeError):
+            continue
+        days = (latest['_ts'] - first['_ts']).days
+        changes[(sid, platform, gt)] = {'diff': diff, 'days': days, 'latest': int(latest['Rating'])}
+    return changes
+
+@st.cache_data(ttl=600)
+def compute_top_milestones(milestones_df):
+    """Return {(student_id, platform): top_milestone_int} in a single pass."""
+    tops = {}
+    if milestones_df is None or milestones_df.empty:
+        return tops
+    m = milestones_df.copy()
+    m['_sid'] = m.iloc[:, 0].astype(str)
+    m['_plat'] = m.iloc[:, 1]
+    for (sid, platform), grp in m.groupby(['_sid', '_plat']):
+        try:
+            tops[(sid, platform)] = int(grp['Milestone'].astype(int).max())
+        except (ValueError, TypeError):
+            continue
+    return tops
+
+@st.cache_data(ttl=600)
+def build_base(_students_df, _history_df, _milestones_df, sig):
+    """Build the flat per-(student, platform, game-type) table + hot-streak count once.
+    The DataFrame args are underscore-prefixed so Streamlit skips hashing them; `sig`
+    (a cheap row-count tuple) is the cache key — so this only rebuilds when data changes,
+    not on every filter/sort/paging rerun."""
+    changes = compute_rating_changes(_history_df)
+    tops = compute_top_milestones(_milestones_df)
+
+    streaks = 0
+    if not _history_df.empty and not _students_df.empty:
+        for s in _students_df.to_dict('records'):
+            sid = str(s.get('ID', ''))
+            for platform in ['Chess.com', 'Lichess']:
+                for gt in ['rapid', 'blitz', 'classical']:
+                    ch = changes.get((sid, platform, gt))
+                    if ch and ch['diff'] >= STREAK_THRESHOLD:
+                        streaks += 1
+
+    rows = []
+    for s in _students_df.to_dict('records'):
+        sid = str(s.get('ID', ''))
+        name = s.get('Name', '')
+        chesscom = str(s.get('Chess.com Nickname', '')).strip()
+        lichess = str(s.get('Lichess Nickname', '')).strip()
+        platforms = []
+        if chesscom:
+            platforms.append(('Chess.com', chesscom))
+        if lichess:
+            platforms.append(('Lichess', lichess))
+        for platform, username in platforms:
+            for gt in ['rapid', 'blitz', 'classical']:
+                ch = changes.get((sid, platform, gt))
+                top_ms = tops.get((sid, platform))
+                profile_url = f"https://chess.com/member/{username}" if platform == 'Chess.com' else f"https://lichess.org/@/{username}"
+                rows.append({
+                    'Student': name,
+                    'Username': f"@{username}",
+                    'Platform': platform,
+                    'Profile': profile_url,
+                    'Game Type': gt.capitalize(),
+                    'Rating Change': ch['diff'] if ch else None,
+                    'Days': ch['days'] if ch else None,
+                    'Milestone': top_ms,
+                    'Hot Streak': ch and ch['diff'] >= STREAK_THRESHOLD,
+                    '_sid': sid,
+                })
+    return pd.DataFrame(rows), streaks
+
 # ==================== MAIN APP ====================
 def main():
     # Header
@@ -299,6 +411,11 @@ def main():
             st.error(f"Could not connect to Google Sheet: {e}")
             st.stop()
 
+    # Build the flat table + hot-streak count once (cached on data size) so reruns from
+    # filters / sort / paging don't rebuild ~4,000 rows every time.
+    data_sig = (len(students_df), len(history_df), len(milestones_df))
+    base_df, streaks = build_base(students_df, history_df, milestones_df, data_sig)
+
     # Sync button
     col1, col2 = st.columns([6, 1])
     with col2:
@@ -312,16 +429,6 @@ def main():
     # Stats row
     now = datetime.utcnow()
     month_start = now.replace(day=1).strftime('%Y-%m-%d')
-
-    streaks = 0
-    if not history_df.empty and not students_df.empty:
-        for _, s in students_df.iterrows():
-            sid = str(s.get('ID', ''))
-            for platform in ['Chess.com', 'Lichess']:
-                for gt in ['rapid', 'blitz', 'classical']:
-                    ch = get_rating_change(sid, platform, gt, history_df)
-                    if ch and ch['diff'] >= STREAK_THRESHOLD:
-                        streaks += 1
 
     ms_this_month = 0
     if not milestones_df.empty:
@@ -354,38 +461,8 @@ def main():
         st.info("No active students found in the sheet.")
         return
 
-    rows = []
-    for _, s in students_df.iterrows():
-        sid = str(s.get('ID', ''))
-        name = s.get('Name', '')
-        chesscom = str(s.get('Chess.com Nickname', '')).strip()
-        lichess = str(s.get('Lichess Nickname', '')).strip()
-
-        platforms = []
-        if chesscom:
-            platforms.append(('Chess.com', chesscom))
-        if lichess:
-            platforms.append(('Lichess', lichess))
-
-        for platform, username in platforms:
-            for gt in ['rapid', 'blitz', 'classical']:
-                ch = get_rating_change(sid, platform, gt, history_df)
-                top_ms = get_top_milestone(sid, platform, milestones_df)
-                profile_url = f"https://chess.com/member/{username}" if platform == 'Chess.com' else f"https://lichess.org/@/{username}"
-                rows.append({
-                    'Student': name,
-                    'Username': f"@{username}",
-                    'Platform': platform,
-                    'Profile': profile_url,
-                    'Game Type': gt.capitalize(),
-                    'Rating Change': ch['diff'] if ch else None,
-                    'Days': ch['days'] if ch else None,
-                    'Milestone': top_ms,
-                    'Hot Streak': ch and ch['diff'] >= STREAK_THRESHOLD,
-                    '_sid': sid,
-                })
-
-    df = pd.DataFrame(rows)
+    # Base table is prebuilt & cached above; reference it (filters are applied next).
+    df = base_df
 
     # Apply filters
     if search:
@@ -400,46 +477,122 @@ def main():
     if filter_game != "All":
         df = df[df['Game Type'] == filter_game]
 
-    # Display
-    st.markdown(f"**{len(df)} results**")
+    # ---- Sort control (icon button) sits next to the results count, above the list ----
+    sort_options = ["Default", "Biggest gains first", "Alphabetical"]
+    _, sort_col = st.columns([8, 1.6])
+    with sort_col:
+        with st.popover("↕ Sort", use_container_width=True):
+            sort_mode = st.radio("Sort by", sort_options, key="student_sort_mode")
+
+    unique_students = int(df['_sid'].nunique()) if not df.empty else 0
+
+    # ---- Group the (already filtered) rows into one card per student (single O(n) pass) ----
+    groups = []
+    if not df.empty:
+        order, by_sid = [], {}
+        for r in df.to_dict('records'):
+            sid = r['_sid']
+            if sid not in by_sid:
+                by_sid[sid] = {'name': r['Student'], 'plat': {}, 'rows': [], 'max_gain': None}
+                order.append(sid)
+            grp = by_sid[sid]
+            grp['rows'].append(r)
+            grp['plat'].setdefault(r['Platform'], r['Profile'])
+            rc = r['Rating Change']
+            if rc is not None and pd.notna(rc):
+                grp['max_gain'] = rc if grp['max_gain'] is None else max(grp['max_gain'], rc)
+        groups = [
+            {'name': by_sid[s]['name'], 'platforms': list(by_sid[s]['plat'].items()),
+             'rows': by_sid[s]['rows'], 'max_gain': by_sid[s]['max_gain']}
+            for s in order
+        ]
+
+    if sort_mode == "Biggest gains first":
+        groups.sort(key=lambda x: (x['max_gain'] is not None, x['max_gain'] if x['max_gain'] is not None else 0), reverse=True)
+    elif sort_mode == "Alphabetical":
+        groups.sort(key=lambda x: str(x['name']).lower())
+
+    # Layout styling for the grouped cards (badges / pills / milestone classes are reused unchanged)
+    st.markdown("""
+    <style>
+    .cm-student { border-bottom:1px solid #1c1f29; }
+    .cm-student > summary { cursor:pointer; padding:8px 2px; font-weight:600; color:#e8eaf0; font-size:15px; }
+    .cm-student > summary:hover { background:#12151c; }
+    .cm-name { margin-right:12px; }
+    .cm-detail { padding:4px 0 12px 24px; }
+    .cm-detail-row { display:flex; align-items:center; gap:16px; padding:4px 0; }
+    .cm-gt { color:#7a8099; font-size:13px; min-width:140px; }
+    </style>
+    """, unsafe_allow_html=True)
 
     ms_icons = {2200: '👑', 2000: '⭐', 1800: '★', 1500: '◆', 1000: '●'}
 
-    for _, row in df.iterrows():
-            col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1.5, 2, 2, 1])
-            with col1:
-                st.markdown(f"**{row['Student']}**  \n`{row['Username']}`")
-            with col2:
-                badge_class = 'badge-chesscom' if row['Platform'] == 'Chess.com' else 'badge-lichess'
-                icon = '♟' if row['Platform'] == 'Chess.com' else '⚡'
-                st.markdown(f'<a href="{row["Profile"]}" target="_blank"><span class="{badge_class}">{icon} {row["Platform"]} ↗</span></a>', unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"<span style='color:#7a8099;font-size:13px'>{row['Game Type']}</span>", unsafe_allow_html=True)
-            with col4:
-                if row['Rating Change'] is not None:
-                    sign = '+' if row['Rating Change'] > 0 else ''
-                    if row['Hot Streak']:
-                        st.markdown(f'<span class="pill-hot">🔥 {sign}{row["Rating Change"]}</span> <span style="font-size:11px;color:#4a5068">{row["Days"]}d</span>', unsafe_allow_html=True)
-                    elif row['Rating Change'] > 0:
-                        st.markdown(f'<span class="pill-good">{sign}{row["Rating Change"]}</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<span style="color:#4a5068">{sign}{row["Rating Change"]}</span>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-            with col5:
-                if row['Milestone']:
-                    try:
-                        ms = int(float(row['Milestone']))
-                    except (ValueError, TypeError):
-                        ms = None
-                    if ms:
-                        ms_class = f'ms-{ms}'
-                        icon = ms_icons.get(ms, '')
-                        st.markdown(f'<span class="{ms_class}">{icon} {ms}</span>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<span style="color:#4a5068">—</span>', unsafe_allow_html=True)
-            with col6:
-                pass
+    def pill_html(row):
+        rc = row['Rating Change']
+        if rc is not None and pd.notna(rc):
+            sign = '+' if rc > 0 else ''
+            if row['Hot Streak']:
+                return f'<span class="pill-hot">🔥 {sign}{rc}</span> <span style="font-size:11px;color:#4a5068">{row["Days"]}d</span>'
+            elif rc > 0:
+                return f'<span class="pill-good">{sign}{rc}</span>'
+            return f'<span style="color:#4a5068">{sign}{rc}</span>'
+        return '<span style="color:#4a5068">—</span>'
+
+    def ms_html(row):
+        if row['Milestone'] is not None and pd.notna(row['Milestone']) and row['Milestone'] != '':
+            try:
+                ms = int(float(row['Milestone']))
+            except (ValueError, TypeError):
+                ms = None
+            if ms:
+                return f'<span class="ms-{ms}">{ms_icons.get(ms, "")} {ms}</span>'
+        return '<span style="color:#4a5068">—</span>'
+
+    def badge_html(platform, profile):
+        badge_class = 'badge-chesscom' if platform == 'Chess.com' else 'badge-lichess'
+        icon = '♟' if platform == 'Chess.com' else '⚡'
+        return f'<a href="{profile}" target="_blank"><span class="{badge_class}">{icon} {platform} ↗</span></a>'
+
+    # ---- One collapsible card per student, paginated so only ~PER_PAGE render per view ----
+    PER_PAGE = 50
+    with st.expander(f"👥 View Students ({unique_students})", expanded=False):
+        if not groups:
+            st.caption("No students match your filters.")
+        else:
+            total = len(groups)
+            n_pages = (total + PER_PAGE - 1) // PER_PAGE
+            page = 1
+            if n_pages > 1:
+                # Key encodes the filters so the page resets to 1 whenever the result set changes.
+                page_key = f"pg_{filter_type}_{filter_platform}_{filter_game}_{sort_mode}_{search}"
+                info_col, pg_col = st.columns([3, 1])
+                with pg_col:
+                    page = int(st.number_input("Page", min_value=1, max_value=n_pages, value=1, step=1, key=page_key))
+                with info_col:
+                    lo = (page - 1) * PER_PAGE + 1
+                    hi = min(page * PER_PAGE, total)
+                    st.caption(f"Showing {lo}–{hi} of {total} · page {page}/{n_pages}")
+            page_groups = groups[(page - 1) * PER_PAGE: page * PER_PAGE]
+            cards = []
+            for grp in page_groups:
+                badges = ' '.join(badge_html(p, url) for p, url in grp['platforms'])
+                detail = []
+                for row in grp['rows']:
+                    p_icon = '♟' if row['Platform'] == 'Chess.com' else '⚡'
+                    detail.append(
+                        f'<div class="cm-detail-row">'
+                        f'<span class="cm-gt">{p_icon} {row["Game Type"]}</span>'
+                        f'<span>{pill_html(row)}</span>'
+                        f'<span>{ms_html(row)}</span>'
+                        f'</div>'
+                    )
+                cards.append(
+                    f'<details class="cm-student">'
+                    f'<summary><span class="cm-name">{grp["name"]}</span>{badges}</summary>'
+                    f'<div class="cm-detail">{"".join(detail)}</div>'
+                    f'</details>'
+                )
+            st.html(''.join(cards))
     with st.sidebar:
             st.markdown("### 🏆 Milestones This Month")
             for ms in [2200, 2000, 1800, 1500, 1000]:
