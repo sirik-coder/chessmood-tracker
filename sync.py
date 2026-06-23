@@ -110,45 +110,53 @@ def main():
         for res in results:
             new_history.append([student_id, res['platform'], res['gameType'], res['rating'], date_str, ts_str, res['username']])
 
-            for ms in MILESTONES:
-                if res['rating'] >= ms:
-                    if not milestones_df.empty:
-                        already = milestones_df[
-                            (milestones_df['Student ID'].astype(str) == student_id) &
-                            (milestones_df['Platform'] == res['platform']) &
-                            (milestones_df['Milestone'].astype(str) == str(ms))
-                        ]
-                    else:
-                        already = pd.DataFrame()
+            # First-time milestone detection — PER (student, platform, game type).
+            # A milestone is "newly reached" only when the player's best PRIOR rating in this
+            # exact game type was below it and the current rating is at/above it. Using the max
+            # of all prior history (not just the last point, and not a platform-wide flag that
+            # conflates rapid/blitz/classical) is what makes first-time detection correct.
+            current_rating = res['rating']
+            prev_max = None
+            if not history_df.empty:
+                prev = history_df[
+                    (history_df['Student ID'].astype(str) == student_id) &
+                    (history_df['Platform'] == res['platform']) &
+                    (history_df['Game Type'] == res['gameType'])
+                ]
+                if not prev.empty:
+                    prev_max = pd.to_numeric(prev['Rating'], errors='coerce').max()
 
-                    if already.empty:
-                        if not history_df.empty:
-                            prev = history_df[
-                                (history_df['Student ID'].astype(str) == str(student_id)) &
-                                (history_df['Platform'] == res['platform']) &
-                                (history_df['Game Type'] == res['gameType'])
-                            ]
-                            if not prev.empty:
-                                try:
-                                    prev_rating = float(prev.iloc[-1]['Rating'])
-                                    if prev_rating < ms:
-                                        new_milestones.append([student_id, res['platform'], ms, date_str, name, res['username']])
-                                except:
-                                    pass
+            if prev_max is not None and pd.notna(prev_max):
+                for ms in MILESTONES:
+                    if prev_max < ms <= current_rating:
+                        new_milestones.append({
+                            'sid': student_id,
+                            'platform': res['platform'],
+                            'gameType': res['gameType'],
+                            'ms': ms,
+                            'name': name,
+                            'username': res['username'],
+                        })
 
     if new_history:
         history_ws.append_rows(new_history)
         print(f"Added {len(new_history)} history records")
 
     if new_milestones:
-        milestones_ws.append_rows(new_milestones)
+        milestone_rows = [[m['sid'], m['platform'], m['ms'], date_str, m['name'], m['username']] for m in new_milestones]
+        milestones_ws.append_rows(milestone_rows)
         print(f"Added {len(new_milestones)} milestones")
 
     milestone_text = ""
     if new_milestones:
-        milestone_text = f"\n🏆 *New milestones:*\n"
+        milestone_text = "\n🏆 *New milestones reached:*\n"
         for m in new_milestones:
-            milestone_text += f"  • {m[4]} reached {m[2]} on {m[1]}\n"
+            if m['platform'] == 'Chess.com':
+                profile = f"https://www.chess.com/member/{m['username']}"
+            else:
+                profile = f"https://lichess.org/@/{m['username']}"
+            gt_label = m['gameType'].capitalize()
+            milestone_text += f"  • *{m['name']}* reached *{m['ms']}* in {gt_label} ({m['platform']}) — <{profile}|View profile ↗>\n"
 
     message = f"♟ *ChessMood Daily Sync Complete*\n✅ Synced {total_students} students\n📊 {len(new_history)} records saved{milestone_text}"
     send_slack(message)
