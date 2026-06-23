@@ -168,6 +168,16 @@ def load_milestones():
     rows = ws.get_all_records()
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['Student ID','Platform','Milestone','Date','Student Name','Username'])
 
+@st.cache_data(ttl=600)
+def load_hotstreaks():
+    # HotStreaksLog is created by sync.py; return empty if it doesn't exist yet.
+    try:
+        ws = get_sheet("HotStreaksLog")
+    except Exception:
+        return pd.DataFrame()
+    rows = ws.get_all_records()
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
 def append_to_sheet(tab_name, rows):
     ws = get_sheet(tab_name)
     ws.append_rows(rows)
@@ -444,46 +454,81 @@ def main():
     with c4:
         st.markdown(f'<div class="stat-box"><div class="stat-label">Platforms Tracked</div><div class="stat-value">2</div><div style="font-size:12px;color:#7a8099">Chess.com · Lichess</div></div>', unsafe_allow_html=True)
 
-    # Click-to-view detail for the Hot Streaks and Milestones cards.
-    # The Platform cell links straight to the player's account (shows the site as the link text).
-    platform_link = st.column_config.LinkColumn('Platform', display_text=r"https?://(?:www\.)?([^/]+)")
+    # Click-to-view detail tables for the Hot Streaks and Milestones cards.
+    # Rendered as HTML so the Platform cell can link to the player's account AND rows reached
+    # TODAY are highlighted green with a "NEW" tag.
+    st.markdown("""
+    <style>
+    .cm-tbl { width:100%; border-collapse:collapse; font-size:14px; }
+    .cm-tbl th { text-align:left; color:#7a8099; font-weight:600; font-size:11px; text-transform:uppercase;
+                 letter-spacing:.5px; padding:6px 10px; border-bottom:1px solid #2a2f40; }
+    .cm-tbl td { padding:8px 10px; border-bottom:1px solid #1c1f29; color:#e8eaf0; }
+    .cm-tbl a { color:#5b9cf6; text-decoration:none; }
+    .cm-tbl tr.cm-new td { background:rgba(62,207,142,0.12); }
+    .cm-tbl tr.cm-new td:first-child { border-left:3px solid #3ecf8e; }
+    .cm-new-tag { background:#3ecf8e; color:#0d0f14; font-size:10px; font-weight:700;
+                  padding:1px 6px; border-radius:6px; margin-left:8px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    def _esc(v):
+        return str(v).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    def _platform_cell(platform, username):
+        u = _esc(str(username).lstrip('@'))
+        url = f"https://www.chess.com/member/{u}" if platform == 'Chess.com' else f"https://lichess.org/@/{u}"
+        return f'<a href="{url}" target="_blank">{_esc(platform)} ↗</a>'
+
+    today_str = now.strftime('%Y-%m-%d')
+    # Hot streaks the sync logged TODAY (so we know which are new) — keyed (sid, platform, gametype).
+    hotlog = load_hotstreaks()
+    new_hot_keys = set()
+    if not hotlog.empty and 'Date' in hotlog.columns:
+        for _, h in hotlog[hotlog['Date'].astype(str) == today_str].iterrows():
+            new_hot_keys.add((str(h.get('Student ID', '')), str(h.get('Platform', '')), str(h.get('Game Type', '')).lower()))
+
     with st.expander(f"🔥 View hot streaks ({streaks})", expanded=False):
-        if 'Hot Streak' in base_df.columns:
-            hs = base_df[base_df['Hot Streak'] == True][['Student', 'Profile', 'Game Type', 'Rating Change', 'Days']]
-            hs = hs.sort_values('Rating Change', ascending=False)
-        else:
-            hs = pd.DataFrame()
+        hs = base_df[base_df['Hot Streak'] == True].sort_values('Rating Change', ascending=False) if 'Hot Streak' in base_df.columns else pd.DataFrame()
         if not hs.empty:
-            st.dataframe(hs, use_container_width=True, hide_index=True,
-                         column_config={'Profile': platform_link})
+            body = []
+            for _, r in hs.iterrows():
+                is_new = (str(r['_sid']), r['Platform'], str(r['Game Type']).lower()) in new_hot_keys
+                cls = ' class="cm-new"' if is_new else ''
+                tag = '<span class="cm-new-tag">NEW</span>' if is_new else ''
+                rc = r['Rating Change']
+                rc_str = f"+{int(rc)}" if pd.notna(rc) else "—"
+                days = int(r['Days']) if pd.notna(r['Days']) else "—"
+                body.append(
+                    f'<tr{cls}><td>{_esc(r["Student"])}{tag}</td>'
+                    f'<td>{_platform_cell(r["Platform"], r["Username"])}</td>'
+                    f'<td>{_esc(r["Game Type"])}</td><td>{rc_str}</td><td>{days}</td></tr>'
+                )
+            st.html('<table class="cm-tbl"><thead><tr><th>Student</th><th>Platform</th><th>Game Type</th>'
+                    '<th>Rating Change</th><th>Days</th></tr></thead><tbody>' + ''.join(body) + '</tbody></table>')
         else:
             st.caption(f"No hot streaks right now (+{STREAK_THRESHOLD} in under {STREAK_DAYS} days).")
 
     with st.expander(f"🏆 View milestones this month ({ms_this_month})", expanded=False):
         if ms_this_month > 0:
             mtm = milestones_df[milestones_df['Date'] >= month_start].copy()
-            if 'Username' in mtm.columns and 'Platform' in mtm.columns:
-                mtm['Profile'] = mtm.apply(
-                    lambda r: f"https://chess.com/member/{r['Username']}" if r['Platform'] == 'Chess.com'
-                    else f"https://lichess.org/@/{r['Username']}", axis=1)
-            cols = [c for c in ['Student Name', 'Name', 'Profile', 'Milestone', 'Date'] if c in mtm.columns]
-            mtm = mtm[cols].rename(columns={'Name': 'Student', 'Student Name': 'Student'})
+            namecol = 'Student Name' if 'Student Name' in mtm.columns else ('Name' if 'Name' in mtm.columns else None)
             if 'Milestone' in mtm.columns:
                 mtm = mtm.sort_values('Milestone', ascending=False)
-            st.dataframe(mtm, use_container_width=True, hide_index=True,
-                         column_config={'Profile': platform_link})
+            body = []
+            for _, r in mtm.iterrows():
+                is_new = str(r.get('Date', '')) == today_str
+                cls = ' class="cm-new"' if is_new else ''
+                tag = '<span class="cm-new-tag">NEW</span>' if is_new else ''
+                student = _esc(r.get(namecol, '')) if namecol else ''
+                body.append(
+                    f'<tr{cls}><td>{student}{tag}</td>'
+                    f'<td>{_platform_cell(r.get("Platform", ""), r.get("Username", ""))}</td>'
+                    f'<td>{_esc(r.get("Milestone", ""))}</td><td>{_esc(r.get("Date", ""))}</td></tr>'
+                )
+            st.html('<table class="cm-tbl"><thead><tr><th>Student</th><th>Platform</th><th>Milestone</th>'
+                    '<th>Date</th></tr></thead><tbody>' + ''.join(body) + '</tbody></table>')
         else:
             st.caption("No milestones reached yet this month.")
-
-    # Filters
-    st.markdown("### Filters")
-    col_f1, col_f2, col_f3 = st.columns(3)
-    with col_f1:
-        filter_type = st.selectbox("Show", ["All", "🔥 Hot Streaks", "🏆 Milestones"])
-    with col_f2:
-        filter_platform = st.selectbox("Platform", ["All", "Chess.com", "Lichess"])
-    with col_f3:
-        filter_game = st.selectbox("Game Type", ["All", "Rapid", "Blitz", "Classical"])
 
     search = st.text_input("🔍 Search by name or username...")
 
@@ -495,18 +540,10 @@ def main():
     # Base table is prebuilt & cached above; reference it (filters are applied next).
     df = base_df
 
-    # Apply filters
+    # Apply search
     if search:
         mask = df['Student'].str.contains(search, case=False, na=False) | df['Username'].str.contains(search, case=False, na=False)
         df = df[mask]
-    if filter_type == "🔥 Hot Streaks":
-        df = df[df['Hot Streak'] == True]
-    if filter_type == "🏆 Milestones":
-        df = df[df['Milestone'].notna()]
-    if filter_platform != "All":
-        df = df[df['Platform'] == filter_platform]
-    if filter_game != "All":
-        df = df[df['Game Type'] == filter_game]
 
     # ---- Sort control (icon button) sits next to the results count, above the list ----
     sort_options = ["Default", "Biggest gains first", "Alphabetical"]
@@ -595,7 +632,7 @@ def main():
             page = 1
             if n_pages > 1:
                 # Key encodes the filters so the page resets to 1 whenever the result set changes.
-                page_key = f"pg_{filter_type}_{filter_platform}_{filter_game}_{sort_mode}_{search}"
+                page_key = f"pg_{sort_mode}_{search}"
                 info_col, pg_col = st.columns([3, 1])
                 with pg_col:
                     page = int(st.number_input("Page", min_value=1, max_value=n_pages, value=1, step=1, key=page_key))
