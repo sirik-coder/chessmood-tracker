@@ -444,26 +444,34 @@ def main():
     with c4:
         st.markdown(f'<div class="stat-box"><div class="stat-label">Platforms Tracked</div><div class="stat-value">2</div><div style="font-size:12px;color:#7a8099">Chess.com · Lichess</div></div>', unsafe_allow_html=True)
 
-    # Click-to-view detail for the Hot Streaks and Milestones cards
+    # Click-to-view detail for the Hot Streaks and Milestones cards.
+    # The Platform cell links straight to the player's account (shows the site as the link text).
+    platform_link = st.column_config.LinkColumn('Platform', display_text=r"https?://(?:www\.)?([^/]+)")
     with st.expander(f"🔥 View hot streaks ({streaks})", expanded=False):
         if 'Hot Streak' in base_df.columns:
-            hs = base_df[base_df['Hot Streak'] == True][['Student', 'Platform', 'Game Type', 'Rating Change', 'Days']]
+            hs = base_df[base_df['Hot Streak'] == True][['Student', 'Profile', 'Game Type', 'Rating Change', 'Days']]
             hs = hs.sort_values('Rating Change', ascending=False)
         else:
             hs = pd.DataFrame()
         if not hs.empty:
-            st.dataframe(hs, use_container_width=True, hide_index=True)
+            st.dataframe(hs, use_container_width=True, hide_index=True,
+                         column_config={'Profile': platform_link})
         else:
             st.caption(f"No hot streaks right now (+{STREAK_THRESHOLD} in under {STREAK_DAYS} days).")
 
     with st.expander(f"🏆 View milestones this month ({ms_this_month})", expanded=False):
         if ms_this_month > 0:
             mtm = milestones_df[milestones_df['Date'] >= month_start].copy()
-            cols = [c for c in ['Student Name', 'Platform', 'Milestone', 'Date'] if c in mtm.columns]
-            mtm = mtm[cols]
+            if 'Username' in mtm.columns and 'Platform' in mtm.columns:
+                mtm['Profile'] = mtm.apply(
+                    lambda r: f"https://chess.com/member/{r['Username']}" if r['Platform'] == 'Chess.com'
+                    else f"https://lichess.org/@/{r['Username']}", axis=1)
+            cols = [c for c in ['Student Name', 'Name', 'Profile', 'Milestone', 'Date'] if c in mtm.columns]
+            mtm = mtm[cols].rename(columns={'Name': 'Student', 'Student Name': 'Student'})
             if 'Milestone' in mtm.columns:
                 mtm = mtm.sort_values('Milestone', ascending=False)
-            st.dataframe(mtm, use_container_width=True, hide_index=True)
+            st.dataframe(mtm, use_container_width=True, hide_index=True,
+                         column_config={'Profile': platform_link})
         else:
             st.caption("No milestones reached yet this month.")
 
