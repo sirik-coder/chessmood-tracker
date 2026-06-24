@@ -116,6 +116,11 @@ def main():
 
     students_data = students_ws.get_all_records()
     students_df = pd.DataFrame(students_data)
+    # Track ONLY active members (our students) — matches the dashboard; skip none/paused/canceled.
+    if not students_df.empty:
+        students_df.columns = [c.strip() for c in students_df.columns]
+        if 'Membership Status' in students_df.columns:
+            students_df = students_df[students_df['Membership Status'].str.lower() == 'active'].reset_index(drop=True)
 
     history_data = history_ws.get_all_records()
     history_df = pd.DataFrame(history_data) if history_data else pd.DataFrame()
