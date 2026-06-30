@@ -95,6 +95,16 @@ def platform_prior_max(res):
     except:
         return None
 
+def get_email(row):
+    """Find the student's email from the sheet row, matching any header that
+    contains 'email' (e.g. 'Email', 'Email Address'). Returns '' if absent."""
+    for key, val in row.items():
+        if 'email' in str(key).strip().lower():
+            v = str(val).strip()
+            if v and v.lower() != 'nan':
+                return v
+    return ''
+
 def send_slack(message):
     webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
     if not webhook_url:
@@ -153,6 +163,7 @@ def main():
         chesscom = str(row.get('Chess.com Nickname', '')).strip()
         lichess = str(row.get('Lichess Nickname', '')).strip()
         name = row.get('Name', '')
+        email = get_email(row)
 
         results = []
         if chesscom:
@@ -213,6 +224,7 @@ def main():
                                     'gameType': res['gameType'],
                                     'ms': ms,
                                     'name': name,
+                                    'email': email,
                                     'username': res['username'],
                                 })
 
@@ -240,6 +252,7 @@ def main():
                                 'gain': gain,
                                 'days': days,
                                 'name': name,
+                                'email': email,
                                 'username': res['username'],
                             })
 
@@ -260,19 +273,22 @@ def main():
     def profile_url(platform, username):
         return f"https://www.chess.com/member/{username}" if platform == 'Chess.com' else f"https://lichess.org/@/{username}"
 
+    def email_tag(rec):
+        return f" (✉ {rec['email']})" if rec.get('email') else ""
+
     milestone_text = ""
     if new_milestones:
         milestone_text = "\n🏆 *New milestones reached:*\n"
         for m in new_milestones:
             gt_label = m['gameType'].capitalize()
-            milestone_text += f"  • *{m['name']}* reached *{m['ms']}* in {gt_label} ({m['platform']}) — <{profile_url(m['platform'], m['username'])}|View profile ↗>\n"
+            milestone_text += f"  • *{m['name']}*{email_tag(m)} reached *{m['ms']}* in {gt_label} ({m['platform']}) — <{profile_url(m['platform'], m['username'])}|View profile ↗>\n"
 
     streak_text = ""
     if new_hotstreaks:
         streak_text = f"\n🔥 *New hot streaks (+{STREAK_THRESHOLD} in under {STREAK_DAYS} days):*\n"
         for h in new_hotstreaks:
             gt_label = h['gameType'].capitalize()
-            streak_text += f"  • *{h['name']}* +{h['gain']} in {gt_label} over {h['days']}d ({h['platform']}) — <{profile_url(h['platform'], h['username'])}|View profile ↗>\n"
+            streak_text += f"  • *{h['name']}*{email_tag(h)} +{h['gain']} in {gt_label} over {h['days']}d ({h['platform']}) — <{profile_url(h['platform'], h['username'])}|View profile ↗>\n"
 
     message = f"♟ *ChessMood Daily Sync Complete*\n✅ Synced {total_students} students\n📊 {len(new_history)} records saved{milestone_text}{streak_text}"
     send_slack(message)
