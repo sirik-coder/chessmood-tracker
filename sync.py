@@ -9,6 +9,11 @@ from datetime import datetime, timedelta
 MILESTONES = [1000, 1500, 1800, 2000, 2200]
 STREAK_THRESHOLD = 100   # rating points gained...
 STREAK_DAYS = 30         # ...within this many days = a "hot streak"
+# A genuine streak is many games worth a normal ~7-10 pts each. After a long break
+# a player's rating is uncertain and each win can be worth tens of points (e.g. +100
+# from 4 games). If the gain averages MORE than this many points per game, we treat
+# it as post-break "recovery" noise and do NOT report it as a hot streak.
+MAX_POINTS_PER_GAME = 15
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
@@ -94,6 +99,60 @@ def platform_prior_max(res):
         return None
     except:
         return None
+
+def chesscom_games_since(username, game_type, since_dt):
+    """Count RATED Chess.com games of this type played since since_dt. Returns None on failure."""
+    tc = {'rapid': 'rapid', 'blitz': 'blitz', 'classical': 'daily'}.get(game_type)
+    if not tc:
+        return None
+    try:
+        r = requests.get(f"https://api.chess.com/pub/player/{username}/games/archives",
+                         headers=API_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return None
+        archives = r.json().get('archives', [])
+        since_ts = int(since_dt.timestamp())
+        count = 0
+        for url in archives[-2:]:  # current + previous month covers the 30-day window
+            ar = requests.get(url, headers=API_HEADERS, timeout=15)
+            if ar.status_code != 200:
+                continue
+            for g in ar.json().get('games', []):
+                if (g.get('time_class') == tc and g.get('rated')
+                        and g.get('end_time', 0) >= since_ts):
+                    count += 1
+        return count
+    except Exception:
+        return None
+
+def lichess_games_since(username, game_type, since_dt):
+    """Count RATED Lichess games of this type played since since_dt. Returns None on failure."""
+    perf = {'rapid': 'rapid', 'blitz': 'blitz', 'classical': 'classical'}.get(game_type)
+    if not perf:
+        return None
+    try:
+        since_ms = int(since_dt.timestamp() * 1000)
+        r = requests.get(
+            f"https://lichess.org/api/games/user/{username}",
+            params={'since': since_ms, 'perfType': perf, 'rated': 'true',
+                    'moves': 'false', 'tags': 'false', 'pgnInJson': 'false', 'max': 300},
+            headers={**API_HEADERS, 'Accept': 'application/x-ndjson'},
+            timeout=20, stream=True)
+        if r.status_code != 200:
+            return None
+        count = 0
+        for line in r.iter_lines():
+            if line:
+                count += 1
+        return count
+    except Exception:
+        return None
+
+def games_in_window(platform, username, game_type, since_dt):
+    """Number of rated games played since since_dt — used to reject post-break 'recovery' jumps."""
+    if platform == 'Chess.com':
+        return chesscom_games_since(username, game_type, since_dt)
+    return lichess_games_since(username, game_type, since_dt)
 
 def get_email(row):
     """Find the student's email from the sheet row, matching any header that
@@ -244,17 +303,32 @@ def main():
                     if gain is not None and gain >= STREAK_THRESHOLD:
                         key = (student_id, res['platform'], res['gameType'])
                         if key not in recent_hot:   # not already notified in the last STREAK_DAYS
-                            recent_hot.add(key)
-                            new_hotstreaks.append({
-                                'sid': student_id,
-                                'platform': res['platform'],
-                                'gameType': res['gameType'],
-                                'gain': gain,
-                                'days': days,
-                                'name': name,
-                                'email': email,
-                                'username': res['username'],
-                            })
+                            # Reject post-break "recovery" jumps: count the games that actually
+                            # produced the gain. A real streak is many games at a normal pace;
+                            # +100 from a handful of games (tens of points each) is RD recovery.
+                            ts0 = pd.Timestamp(first['_ts'])
+                            if ts0.tzinfo is None:
+                                ts0 = ts0.tz_localize('UTC')
+                            ngames = games_in_window(res['platform'], res['username'],
+                                                     res['gameType'], ts0.to_pydatetime())
+                            looks_like_recovery = ngames is not None and (
+                                ngames == 0 or (gain / ngames) > MAX_POINTS_PER_GAME)
+                            if looks_like_recovery:
+                                print(f"Skipped recovery jump: {name} +{gain} from {ngames} "
+                                      f"games ({res['platform']} {res['gameType']})")
+                            else:
+                                recent_hot.add(key)
+                                new_hotstreaks.append({
+                                    'sid': student_id,
+                                    'platform': res['platform'],
+                                    'gameType': res['gameType'],
+                                    'gain': gain,
+                                    'days': days,
+                                    'games': ngames,
+                                    'name': name,
+                                    'email': email,
+                                    'username': res['username'],
+                                })
 
     if new_history:
         history_ws.append_rows(new_history)
@@ -288,7 +362,8 @@ def main():
         streak_text = f"\n🔥 *New hot streaks (+{STREAK_THRESHOLD} in under {STREAK_DAYS} days):*\n"
         for h in new_hotstreaks:
             gt_label = h['gameType'].capitalize()
-            streak_text += f"  • *{h['name']}*{email_tag(h)} +{h['gain']} in {gt_label} over {h['days']}d ({h['platform']}) — <{profile_url(h['platform'], h['username'])}|View profile ↗>\n"
+            games_part = f", {h['games']} games" if h.get('games') is not None else ""
+            streak_text += f"  • *{h['name']}*{email_tag(h)} +{h['gain']} in {gt_label} over {h['days']}d{games_part} ({h['platform']}) — <{profile_url(h['platform'], h['username'])}|View profile ↗>\n"
 
     message = f"♟ *ChessMood Daily Sync Complete*\n✅ Synced {total_students} students\n📊 {len(new_history)} records saved{milestone_text}{streak_text}"
     send_slack(message)
