@@ -1,0 +1,24 @@
+name: Keep app awake
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours (UTC) - well under the ~12h sleep threshold
+  workflow_dispatch:          # lets you run it manually from the Actions tab
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: browser-actions/setup-chrome@v1   # guarantees Chrome is present
+
+      - name: Install Selenium
+        run: pip install selenium
+
+      - name: Wake the app
+        run: python keep_awake.py
