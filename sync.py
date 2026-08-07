@@ -14,6 +14,11 @@ STREAK_DAYS = 30         # ...within this many days = a "hot streak"
 # from 4 games). If the gain averages MORE than this many points per game, we treat
 # it as post-break "recovery" noise and do NOT report it as a hot streak.
 MAX_POINTS_PER_GAME = 15
+# A new / underrated account calibrates fast — it can rocket hundreds of points in a
+# handful of games (e.g. reaching 2000 in ~30 games), crossing milestones that aren't
+# "earned progress" yet. We only report a milestone once the rating is backed by at
+# least this many rated games in that game type.
+MIN_MILESTONE_GAMES = 50
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
@@ -42,7 +47,9 @@ def fetch_chesscom(username):
             rating = blk.get('last', {}).get('rating')
             if rating:
                 best = blk.get('best', {})
-                out[gt] = {'rating': rating, 'best': best.get('rating'), 'best_ts': best.get('date')}
+                rec = blk.get('record', {})
+                games = (rec.get('win') or 0) + (rec.get('loss') or 0) + (rec.get('draw') or 0)
+                out[gt] = {'rating': rating, 'best': best.get('rating'), 'best_ts': best.get('date'), 'games': games}
         return out
     except:
         return None
@@ -54,11 +61,13 @@ def fetch_lichess(username):
             return None
         d = r.json()
         perfs = d.get('perfs', {})
-        return {
-            'rapid': perfs.get('rapid', {}).get('rating'),
-            'blitz': perfs.get('blitz', {}).get('rating'),
-            'classical': perfs.get('classical', {}).get('rating'),
-        }
+        out = {}
+        for gt in ['rapid', 'blitz', 'classical']:
+            node = perfs.get(gt, {})
+            rating = node.get('rating')
+            if rating:
+                out[gt] = {'rating': rating, 'games': node.get('games', 0)}
+        return out
     except:
         return None
 
@@ -232,15 +241,18 @@ def main():
                     if gt in data:
                         info = data[gt]
                         results.append({'platform': 'Chess.com', 'gameType': gt, 'rating': info['rating'],
-                                        'username': chesscom, 'best': info['best'], 'best_ts': info['best_ts']})
+                                        'username': chesscom, 'best': info['best'], 'best_ts': info['best_ts'],
+                                        'games': info['games']})
 
         if lichess:
             data = fetch_lichess(lichess)
             if data:
                 for gt in ['rapid', 'blitz', 'classical']:
-                    if data.get(gt):
-                        results.append({'platform': 'Lichess', 'gameType': gt, 'rating': data[gt],
-                                        'username': lichess, 'best': None, 'best_ts': None})
+                    if gt in data:
+                        info = data[gt]
+                        results.append({'platform': 'Lichess', 'gameType': gt, 'rating': info['rating'],
+                                        'username': lichess, 'best': None, 'best_ts': None,
+                                        'games': info['games']})
 
         if results:
             total_students += 1
@@ -274,9 +286,17 @@ def main():
                         # the player's first time EVER (they may have reached it earlier, then dipped).
                         # Confirm against the platform's all-time history before flagging it.
                         plat_prior = platform_prior_max(res)
+                        games = res.get('games')
                         for ms in candidate_ms:
                             true_prior = prev_max if plat_prior is None else max(prev_max, plat_prior)
                             if true_prior < ms:
+                                # Skip "jump" milestones from new/underrated accounts still
+                                # calibrating: a rating reached on very few rated games isn't
+                                # earned progress. (Unknown game count -> don't suppress.)
+                                if games is not None and games < MIN_MILESTONE_GAMES:
+                                    print(f"Skipped jump milestone: {name} {ms} in "
+                                          f"{res['gameType']} ({res['platform']}) — only {games} rated games")
+                                    continue
                                 new_milestones.append({
                                     'sid': student_id,
                                     'platform': res['platform'],
