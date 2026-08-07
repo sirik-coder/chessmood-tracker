@@ -19,6 +19,12 @@ MAX_POINTS_PER_GAME = 15
 # "earned progress" yet. We only report a milestone once the rating is backed by at
 # least this many rated games in that game type.
 MIN_MILESTONE_GAMES = 50
+# If the player's all-time best sits more than this many points ABOVE a milestone, they
+# have clearly held that level before (a best of 1060 means they passed 1000 long ago) —
+# so it isn't a first-time crossing, even if the peak was set today. This guards against
+# false milestones when our own tracking history started mid-dip. A genuine first crossing
+# lands the best right at the milestone (e.g. first-ever 2000 -> best ~2003), not far above.
+PEAK_MARGIN = 40
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
@@ -287,7 +293,16 @@ def main():
                         # Confirm against the platform's all-time history before flagging it.
                         plat_prior = platform_prior_max(res)
                         games = res.get('games')
+                        best_rating = res.get('best')
                         for ms in candidate_ms:
+                            # If the all-time best sits well ABOVE this milestone, the player has
+                            # held the level before (best 1060 => passed 1000 long ago), even if
+                            # the peak was set today. Guards against false first-time milestones
+                            # when our tracking history started mid-dip.
+                            if best_rating is not None and best_rating >= ms + PEAK_MARGIN:
+                                print(f"Skipped already-held milestone: {name} {ms} in "
+                                      f"{res['gameType']} ({res['platform']}) — best is {best_rating}")
+                                continue
                             true_prior = prev_max if plat_prior is None else max(prev_max, plat_prior)
                             if true_prior < ms:
                                 # Skip "jump" milestones from new/underrated accounts still
