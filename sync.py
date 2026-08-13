@@ -135,6 +135,40 @@ def platform_prior_max(res):
     except:
         return None
 
+def longest_flat_days(timestamps, ratings):
+    """Longest stretch, in days, over which the rating never changed - i.e. the student's
+    longest break inside whatever window this is handed. Expects both sequences sorted
+    oldest-first and aligned.
+
+    Only used as a fallback when games_in_window() cannot reach the platform API. A rating
+    only moves when games are played, so an unchanging stretch means they were away.
+    """
+    longest = 0.0
+    run_start = prev_ts = prev_rating = None
+
+    for ts, rating in zip(timestamps, ratings):
+        if pd.isna(ts) or pd.isna(rating):
+            continue
+        if prev_rating is None:
+            run_start = prev_ts = ts
+            prev_rating = rating
+            continue
+
+        if rating == prev_rating:
+            # Unchanged, so idle right through this reading: the flat run reaches from the
+            # last move up to now.
+            longest = max(longest, (ts - run_start).total_seconds() / 86400.0)
+        else:
+            # It moved, so they played after the previous reading. Only the days before that
+            # final one count as idle, which is what makes a sparse history measure correctly.
+            longest = max(longest, (ts - prev_ts).total_seconds() / 86400.0 - 1.0)
+            run_start = ts
+
+        prev_ts, prev_rating = ts, rating
+
+    return longest
+
+
 def outranking_format(ratings_by_platform, platform, game_type, rating):
     """Is another game type on this platform far enough above `rating` to make a milestone
     here meaningless? Compares only within the same platform - Chess.com and Lichess are
@@ -409,12 +443,30 @@ def main():
                                 ts0 = ts0.tz_localize('UTC')
                             ngames = games_in_window(res['platform'], res['username'],
                                                      res['gameType'], ts0.to_pydatetime())
-                            looks_like_recovery = ngames is not None and (
-                                ngames == 0 or (gain / ngames) > MAX_POINTS_PER_GAME)
-                            if looks_like_recovery:
-                                print(f"Skipped recovery jump: {name} +{gain} from {ngames} "
-                                      f"games ({res['platform']} {res['gameType']})")
+                            if ngames is None:
+                                # The games API could not be reached (network, rate limit, private
+                                # or renamed account). Without a count the pace check above would
+                                # pass EVERYTHING, so fall back to our own history: a long stretch
+                                # with no rating movement means they were away, which makes this a
+                                # post-break jump. Always logged - a failed API call must never
+                                # look like a clean run.
+                                wf = w.sort_values('_ts')
+                                flat = longest_flat_days(
+                                    wf['_ts'], pd.to_numeric(wf['Rating'], errors='coerce'))
+                                looks_like_recovery = flat >= BREAK_DAYS
+                                print(f"Games API unavailable: {name} +{gain} in {res['gameType']} "
+                                      f"({res['platform']}) - fell back to tracked history, "
+                                      f"longest idle {flat:.0f}d -> " + (
+                                          "post-break jump, skipped" if looks_like_recovery
+                                          else "pace unverified, allowed"))
                             else:
+                                looks_like_recovery = (
+                                    ngames == 0 or (gain / ngames) > MAX_POINTS_PER_GAME)
+                                if looks_like_recovery:
+                                    print(f"Skipped recovery jump: {name} +{gain} from {ngames} "
+                                          f"games ({res['platform']} {res['gameType']})")
+
+                            if not looks_like_recovery:
                                 recent_hot.add(key)
                                 new_hotstreaks.append({
                                     'sid': student_id,
