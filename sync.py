@@ -25,6 +25,26 @@ MIN_MILESTONE_GAMES = 50
 # false milestones when our own tracking history started mid-dip. A genuine first crossing
 # lands the best right at the milestone (e.g. first-ever 2000 -> best ~2003), not far above.
 PEAK_MARGIN = 40
+
+# A milestone only means something relative to the level a player has already shown. If
+# another game type on the SAME platform sits more than this many points above the one
+# crossing the milestone, the crossing is not an achievement - that format is just catching
+# up. Example: a 1781 rapid player crossing 1500 in blitz. Complements the two guards above:
+# those look only WITHIN one game type, this compares ACROSS game types on one platform.
+MILESTONE_GAP = 200
+
+# A streak claims "gained STREAK_THRESHOLD in under STREAK_DAYS", which we can only claim if
+# we know roughly where the student was that long ago. History starts the day a student is
+# added to the Students sheet, so for a recent addition the oldest reading is an arbitrary
+# point that may well be a dip - measuring from it invents a rise. The games-per-game check
+# does not catch this, because an active player racks up plenty of games.
+MIN_HISTORY_DAYS = 21
+
+# Fallback only, for when the games API cannot be reached: a stretch this long with no rating
+# movement means the student was not playing, so a jump straight after it is recovery rather
+# than a streak. Without this, an API failure makes the pace check pass everything silently.
+BREAK_DAYS = 14
+
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
@@ -114,6 +134,24 @@ def platform_prior_max(res):
         return None
     except:
         return None
+
+def outranking_format(ratings_by_platform, platform, game_type, rating):
+    """Is another game type on this platform far enough above `rating` to make a milestone
+    here meaningless? Compares only within the same platform - Chess.com and Lichess are
+    different scales. Returns (game_type, rating, gap) for the highest such format, or None
+    if nothing outranks this one by more than MILESTONE_GAP."""
+    best_gt, best_rating = None, None
+    for gt, other in (ratings_by_platform.get(platform) or {}).items():
+        if gt == game_type or other is None:
+            continue
+        if best_rating is None or other > best_rating:
+            best_gt, best_rating = gt, other
+
+    if best_rating is None:
+        return None
+    gap = best_rating - rating
+    return (best_gt, best_rating, gap) if gap > MILESTONE_GAP else None
+
 
 def chesscom_games_since(username, game_type, since_dt):
     """Count RATED Chess.com games of this type played since since_dt. Returns None on failure."""
@@ -263,6 +301,12 @@ def main():
         if results:
             total_students += 1
 
+        # Every rating fetched for this student this run, so a milestone in one game type can
+        # be judged against the level they show in the others on the same platform.
+        ratings_by_platform = {}
+        for r in results:
+            ratings_by_platform.setdefault(r['platform'], {})[r['gameType']] = r['rating']
+
         for res in results:
             new_history.append([student_id, res['platform'], res['gameType'], res['rating'], date_str, ts_str, res['username']])
 
@@ -287,6 +331,19 @@ def main():
                 prev_max = pd.to_numeric(prev['Rating'], errors='coerce').max()
                 if pd.notna(prev_max):
                     candidate_ms = [ms for ms in MILESTONES if prev_max < ms <= current_rating]
+
+                    # A crossing does not count if another game type on this platform is
+                    # already far above it - the player is only catching up. Checked before
+                    # platform_prior_max() below, which can cost an HTTP request.
+                    outranked = outranking_format(ratings_by_platform, res['platform'],
+                                                  res['gameType'], current_rating)
+                    if candidate_ms and outranked:
+                        other_gt, other_rating, gap = outranked
+                        print(f"Skipped outranked milestone: {name} {candidate_ms} in "
+                              f"{res['gameType']} ({res['platform']}) - {other_gt} is "
+                              f"{other_rating}, {gap} higher")
+                        candidate_ms = []
+
                     if candidate_ms:
                         # Our History only goes back to tracking start, so a crossing here might not be
                         # the player's first time EVER (they may have reached it earlier, then dipped).
@@ -335,7 +392,13 @@ def main():
                         days = (pd.Timestamp(now) - first['_ts']).days
                     except (ValueError, TypeError):
                         gain = None
-                    if gain is not None and gain >= STREAK_THRESHOLD:
+                    if gain is not None and gain >= STREAK_THRESHOLD and days < MIN_HISTORY_DAYS:
+                        # Baseline is only `days` old, so "gained this much in 30 days" would be
+                        # measured from an arbitrary starting point - often the day the student
+                        # was added, which may have been a dip. Wait for real history.
+                        print(f"Skipped thin history: {name} +{gain} over only {days}d "
+                              f"({res['platform']} {res['gameType']})")
+                    elif gain is not None and gain >= STREAK_THRESHOLD:
                         key = (student_id, res['platform'], res['gameType'])
                         if key not in recent_hot:   # not already notified in the last STREAK_DAYS
                             # Reject post-break "recovery" jumps: count the games that actually

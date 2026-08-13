@@ -11,6 +11,18 @@ import time
 MILESTONES = [1000, 1500, 1800, 2000, 2200]
 STREAK_THRESHOLD = 100
 STREAK_DAYS = 30
+
+# A milestone only means something relative to the level a player has already shown. If
+# another game type on the SAME platform sits more than this many points above the one
+# crossing the milestone, that format is just catching up, not achieving something.
+# Keep in step with the same constants in sync.py.
+MILESTONE_GAP = 200
+
+# A rating change is only meaningful measured against where the student actually was. History
+# starts the day they are added to the sheet, so for a recent addition the oldest reading is
+# an arbitrary point that may be a dip. Below this many days, report nothing.
+MIN_HISTORY_DAYS = 21
+
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Chess.com's API blocks requests without a descriptive User-Agent (Cloudflare 403).
@@ -213,6 +225,23 @@ def fetch_lichess(username):
         return None
 
 # ==================== SYNC ====================
+def outranking_format(ratings_by_platform, platform, game_type, rating):
+    """Is another game type on this platform far enough above `rating` to make a milestone
+    here meaningless? Same platform only - Chess.com and Lichess are different scales.
+    Keep in step with the identical helper in sync.py."""
+    best_gt, best_rating = None, None
+    for gt, other in (ratings_by_platform.get(platform) or {}).items():
+        if gt == game_type or other is None:
+            continue
+        if best_rating is None or other > best_rating:
+            best_gt, best_rating = gt, other
+
+    if best_rating is None:
+        return None
+    gap = best_rating - rating
+    return (best_gt, best_rating, gap) if gap > MILESTONE_GAP else None
+
+
 def sync_all(students_df, history_df, milestones_df):
     now = datetime.utcnow()
     date_str = now.strftime('%Y-%m-%d')
@@ -248,8 +277,20 @@ def sync_all(students_df, history_df, milestones_df):
                     if data.get(gt):
                         results.append({'platform': 'Lichess', 'gameType': gt, 'rating': data[gt], 'username': lichess})
 
+        # Every rating fetched for this student, so a milestone in one game type can be judged
+        # against the level they show in the others on the same platform.
+        ratings_by_platform = {}
+        for r in results:
+            ratings_by_platform.setdefault(r['platform'], {})[r['gameType']] = r['rating']
+
         for res in results:
             new_history.append([student_id, res['platform'], res['gameType'], res['rating'], date_str, ts_str, res['username']])
+
+            # Another format on this platform is already far above this one, so any crossing
+            # here is the player catching up, not a new achievement.
+            if outranking_format(ratings_by_platform, res['platform'], res['gameType'], res['rating']):
+                continue
+
             for ms in MILESTONES:
                 if res['rating'] >= ms:
                     already = milestones_df[
@@ -301,6 +342,10 @@ def get_rating_change(student_id, platform, game_type, history_df):
     first = window.iloc[0]
     diff = int(latest['Rating']) - int(first['Rating'])
     days = (latest['Timestamp'] - first['Timestamp']).days
+    # Too little history for "where they were" to mean anything - the oldest reading would be
+    # an arbitrary point, often the day the student was added, which may have been a dip.
+    if days < MIN_HISTORY_DAYS:
+        return None
     return {'diff': diff, 'days': days, 'latest': int(latest['Rating'])}
 
 def get_top_milestone(student_id, platform, milestones_df):
@@ -337,6 +382,9 @@ def compute_rating_changes(history_df):
         except (ValueError, TypeError):
             continue
         days = (latest['_ts'] - first['_ts']).days
+        # See get_rating_change(): too little history to measure against.
+        if days < MIN_HISTORY_DAYS:
+            continue
         changes[(sid, platform, gt)] = {'diff': diff, 'days': days, 'latest': int(latest['Rating'])}
     return changes
 
